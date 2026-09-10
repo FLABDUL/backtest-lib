@@ -164,12 +164,20 @@ class PolarsTimeseries[T: (float, int)](Timeseries[T, np.datetime64]):
     # the scalar types are properly kept track of.
     def _rhs(
         self, other: VectorOps[Scalar] | ScalarU
-    ) -> tuple[pl.Series | T, type[ScalarU]]:
+    ) -> tuple[pl.Series | ScalarU, type[ScalarU]]:
         if isinstance(other, (int, float)):
-            return self._scalar_type(other), self._scalar_type
+            scalar_type = (
+                float if self._scalar_type is float or isinstance(other, float) else int
+            )
+            return other, scalar_type
         if isinstance(other, PolarsTimeseries):
             if other._axis is self._axis or other._axis.labels == self._axis.labels:
-                return other._vec, other._scalar_type
+                scalar_type = (
+                    float
+                    if self._scalar_type is float or other._scalar_type is float
+                    else int
+                )
+                return other._vec, scalar_type
             raise ValueError("Axis mismatch: operations require identical PeriodAxis.")
         raise TypeError("Only scalars or same-axis PolarsTimeseries are supported.")
 

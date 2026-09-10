@@ -113,6 +113,15 @@ def test_arithmetic_with_timeseries(small_timeseries, timeseries_type) -> None:
     assert combined.to_series().to_list() == [11.0, 22.0, 33.0]
 
 
+def test_arithmetic_promotes_mixed_numeric_types(timeseries_type) -> None:
+    periods = [np.datetime64("2024-01-01"), np.datetime64("2024-01-02")]
+    ints = timeseries_type.from_vectors([1, 2], periods)
+    floats = timeseries_type.from_vectors([0.5, 1.5], periods)
+
+    assert (ints + 0.5).to_series().to_list() == [1.5, 2.5]
+    assert (floats + ints).to_series().to_list() == [1.5, 3.5]
+
+
 def test_axis_mismatch_raises(timeseries_type) -> None:
     left = timeseries_type.from_vectors(
         values=[1.0, 2.0],
