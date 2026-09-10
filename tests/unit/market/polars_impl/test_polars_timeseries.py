@@ -134,6 +134,14 @@ def test_sum_mean_abs_floor_truncate(small_timeseries) -> None:
     assert small_timeseries.truncate().to_series().dtype == pl.Int64
 
 
+def test_integer_mean_preserves_fraction(timeseries_type) -> None:
+    timeseries = timeseries_type.from_vectors(
+        values=[1, 2],
+        periods=[np.datetime64("2024-01-01"), np.datetime64("2024-01-02")],
+    )
+    assert timeseries.mean() == 1.5
+
+
 def test_to_series_backends(small_timeseries) -> None:
     polars_series = small_timeseries.to_series()
     pandas_series = small_timeseries.to_series(backend="pandas")

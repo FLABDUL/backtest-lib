@@ -332,11 +332,11 @@ class PolarsTimeseries[T: (float, int)](Timeseries[T, np.datetime64]):
     def sum(self) -> T:
         return self._scalar_type(self._vec.sum())
 
-    def mean(self) -> T:
+    def mean(self) -> float:
         mean = self._vec.mean()
         if not isinstance(mean, (int, float)):
             raise TypeError(f"mean() returned non-numeric value {mean!r}")
-        return self._scalar_type(mean)
+        return float(mean)
 
     def abs(self) -> PolarsTimeseries[T]:
         return PolarsTimeseries[T](
