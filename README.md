@@ -41,6 +41,13 @@ results.values_held.plot().properties(width=1000, height=600)
 ```
 Output: ![The output chart of the above result](docs/assets/chart.svg)
 
+### StockFit point-in-time example
+
+An offline-first example shows how to adapt StockFit-shaped prices and annual
+filings into point-in-time signals, compare a fundamental ranking with an
+equal-weight portfolio, and keep live provider data opt-in. See the
+[StockFit example guide](docs/stockfit/README.md).
+
 ### Strategy
 
 This library provides a lightweight framework for backtesting trading strategies. At its core, you define a strategy as a simple Python function that maps the current market state and portfolio into a decision about what to hold next. The library handles the rest: simulating trades over time, applying your decision rules at an optionally specified frequency, and generating performance statistics.

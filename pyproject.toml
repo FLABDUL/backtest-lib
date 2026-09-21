@@ -79,6 +79,7 @@ python-packages = ["backtest_lib"]
 
 [tool.pyrefly]
 project-includes = ["**/*"]
+search-path = ["src", "."]
 project-excludes = [
   "**/node_modules",
   "**/__pycache__",
@@ -91,6 +92,7 @@ project-excludes = [
 addopts = ["-m", "not benchmark"]
 log_cli = true
 log_cli_level = "DEBUG"
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 88

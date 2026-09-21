@@ -1,0 +1,48 @@
+{
+  "cohort": [
+    "AAPL",
+    "MSFT",
+    "COST"
+  ],
+  "coverage": {
+    "end": "2024-06-03",
+    "observations": 30,
+    "start": "2022-01-03"
+  },
+  "generated_at": "2026-09-21T12:21:36.946711+00:00",
+  "methodology": {
+    "baseline": "equal weight over the same cohort and dates",
+    "decision_schedule": "monthly",
+    "initial_capital": 1000000,
+    "initial_position": "cash",
+    "score": "year-on-year revenue growth plus operating margin",
+    "selection": "top two eligible securities, equal weighted"
+  },
+  "mode": "synthetic",
+  "strategies": {
+    "equal_weight": {
+      "annualised_return": 24.368250257110205,
+      "annualised_volatility": 0.08876047251217381,
+      "average_turnover": 0.016666666666666666,
+      "ending_date": "2024-06-03",
+      "ending_nav": 1469526.5674867993,
+      "maximum_drawdown": 0.0,
+      "observations": 30,
+      "sharpe": 274.3141126673335,
+      "starting_date": "2022-01-03",
+      "total_return": 0.4695265674867992
+    },
+    "fundamental": {
+      "annualised_return": 26.699240930133882,
+      "annualised_volatility": 0.11824660888256196,
+      "average_turnover": 0.03333333333333333,
+      "ending_date": "2024-06-03",
+      "ending_nav": 1484986.020317238,
+      "maximum_drawdown": 0.0,
+      "observations": 30,
+      "sharpe": 225.6237297818045,
+      "starting_date": "2022-01-03",
+      "total_return": 0.48498602031723803
+    }
+  }
+}

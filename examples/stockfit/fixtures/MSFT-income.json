@@ -1,0 +1,25 @@
+{
+  "fixtureNotice": "Invented synthetic data; not a StockFit response",
+  "payload": [
+    {
+      "period": "2020-12-31", "fiscalYear": 2020, "fiscalPeriod": "FY",
+      "dateFiled": "2021-03-15", "facts": {"revenue": 2000, "operatingIncome": 360},
+      "sources": {}
+    },
+    {
+      "period": "2021-12-31", "fiscalYear": 2021, "fiscalPeriod": "FY",
+      "dateFiled": "2022-03-15", "facts": {"revenue": 2200, "operatingIncome": 440},
+      "sources": {}
+    },
+    {
+      "period": "2022-12-31", "fiscalYear": 2022, "fiscalPeriod": "FY",
+      "dateFiled": "2023-03-15", "facts": {"revenue": 2420, "operatingIncome": 508},
+      "sources": {}
+    },
+    {
+      "period": "2023-12-31", "fiscalYear": 2023, "fiscalPeriod": "FY",
+      "dateFiled": "2024-03-15", "facts": {"revenue": 2662, "operatingIncome": 586},
+      "sources": {}
+    }
+  ]
+}
