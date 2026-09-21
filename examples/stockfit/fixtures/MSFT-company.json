@@ -1,0 +1,10 @@
+{
+  "fixtureNotice": "Invented synthetic data; not a StockFit response",
+  "payload": {
+    "symbols": ["MSFT"],
+    "name": "Synthetic MSFT Example",
+    "sector": "Synthetic Technology",
+    "industry": "Synthetic Software",
+    "cik": "synthetic-present"
+  }
+}

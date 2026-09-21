@@ -1,0 +1,10 @@
+{
+  "fixtureNotice": "Invented synthetic data; not a StockFit response",
+  "payload": {
+    "symbols": ["COST"],
+    "name": "Synthetic COST Example",
+    "sector": "Synthetic Consumer",
+    "industry": "Synthetic Retail",
+    "cik": "synthetic-present"
+  }
+}

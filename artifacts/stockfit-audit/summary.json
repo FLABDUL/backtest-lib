@@ -1,0 +1,81 @@
+{
+  "cohort": [
+    "AAPL",
+    "MSFT",
+    "COST"
+  ],
+  "failure_categories": [],
+  "generated_at": "2026-09-21T12:00:00+00:00",
+  "max_filing_lag_days": {
+    "max": 106.0,
+    "median": 75.0,
+    "min": 46.0
+  },
+  "median_filing_lag_days": {
+    "max": 105.0,
+    "median": 74.0,
+    "min": 46.0
+  },
+  "missing_symbols": [],
+  "mode": "synthetic",
+  "operating_income_completeness_pct": {
+    "max": 100.0,
+    "median": 100.0,
+    "min": 75.0
+  },
+  "provenance_totals": {
+    "derived_facts": 0,
+    "numeric_before_facts": 1,
+    "source_entries": 1
+  },
+  "rate_limit": {},
+  "raw_provider_data_retained": false,
+  "reason_definitions": {
+    "company_industry_missing": "Industry metadata is missing.",
+    "company_response_invalid": "Company response is not an object.",
+    "company_sector_missing": "Sector metadata is missing.",
+    "company_symbol_mismatch": "Company response does not include the requested symbol.",
+    "filing_before_period_end": "A filing date precedes its fiscal period end.",
+    "filing_lag_large": "Maximum filing lag exceeds 90 days.",
+    "fiscal_year_duplicate": "Annual statements contain a duplicate fiscal year.",
+    "fiscal_year_fallback": "A fiscal year was inferred from a validated period date.",
+    "fiscal_year_gap": "At least one fiscal year is missing from the returned range.",
+    "no_usable_consecutive_pair": "No consecutive usable annual pair exists.",
+    "operating_income_incomplete": "Operating-income completeness is below 100 percent.",
+    "price_duplicate_timestamp": "Price observations contain a duplicate timestamp.",
+    "price_empty": "Price response contains no observations.",
+    "price_end_stale": "Price coverage ends more than seven days before execution.",
+    "price_gap_large": "A calendar gap between prices exceeds seven days.",
+    "price_observation_invalid": "At least one price observation is invalid.",
+    "price_response_invalid": "Price response has an invalid shape.",
+    "price_start_late": "Price coverage starts more than 31 days after requested.",
+    "price_symbol_mismatch": "Price response symbol differs from the request.",
+    "revenue_incomplete": "Revenue completeness is below 100 percent.",
+    "statement_history_short": "Fewer than five annual statements were returned.",
+    "statement_response_invalid": "Statement response is not a list.",
+    "statement_row_invalid": "At least one annual statement row is malformed."
+  },
+  "request_end": "2026-09-21",
+  "request_start": "2021-01-01",
+  "revenue_completeness_pct": {
+    "max": 100.0,
+    "median": 100.0,
+    "min": 100.0
+  },
+  "run_status": "complete",
+  "shared_price_end": "2024-06-03",
+  "shared_price_start": "2022-01-03",
+  "status_counts": {
+    "fail": 0,
+    "pass": 0,
+    "review": 3
+  },
+  "thresholds": {
+    "maximum_filing_lag_days": 90,
+    "minimum_annual_statements": 5,
+    "price_end_staleness_days": 7,
+    "price_gap_days": 7,
+    "price_start_delay_days": 31,
+    "required_fact_completeness_pct": 100.0
+  }
+}

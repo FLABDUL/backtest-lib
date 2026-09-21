@@ -15,10 +15,14 @@ from examples.stockfit.audit import summarise_cohort
 from examples.stockfit.audit_cli import (
     LIVE_COHORT,
     AuditRunAborted,
+    _load_fixture,
     collect_live_audit,
     company_csv,
+    main,
+    parse_args,
     publish_artifacts,
     quality_chart,
+    run_offline_audit,
     summary_mapping,
 )
 from examples.stockfit.client import StockFitError
@@ -396,3 +400,142 @@ def test_failed_directory_swap_restores_old_set_and_cleans_temporary_paths(
     assert artifact_bytes(destination) == before
     assert not any("-staging-" in path.name for path in tmp_path.iterdir())
     assert not any("-backup-" in path.name for path in tmp_path.iterdir())
+
+
+def test_default_cli_is_offline_and_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("STOCKFIT_TOKEN", raising=False)
+
+    first = run_offline_audit(tmp_path, now=FIXED_NOW)
+    first_bytes = artifact_bytes(tmp_path)
+    second = run_offline_audit(tmp_path, now=FIXED_NOW)
+
+    assert first == second
+    assert first_bytes == artifact_bytes(tmp_path)
+    assert first.mode == "synthetic"
+    assert first.cohort == ("AAPL", "MSFT", "COST")
+
+
+def test_live_cli_requires_process_token(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("STOCKFIT_TOKEN", raising=False)
+
+    with pytest.raises(SystemExit, match="Set STOCKFIT_TOKEN"):
+        main(["--live", "--output-dir", str(tmp_path)], now=FIXED_NOW)
+
+
+def test_incomplete_live_run_writes_labelled_outputs_and_exits_two(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("STOCKFIT_TOKEN", "invented-token")
+
+    result = main(
+        ["--live", "--output-dir", str(tmp_path)],
+        now=FIXED_NOW,
+        client_factory=lambda token: FakeAuditClient(timeout_symbol="JPM"),
+    )
+
+    assert result == 2
+    summary = json.loads((tmp_path / "summary.json").read_text())
+    assert summary["run_status"] == "incomplete"
+    assert summary["missing_symbols"] == ["JPM"]
+
+
+def test_help_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        parse_args(["--help"])
+
+    assert exc_info.value.code == 0
+    assert "Audit StockFit data quality" in capsys.readouterr().out
+
+
+def test_live_default_output_directory_is_selected_after_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STOCKFIT_TOKEN", "invented-token")
+    seen: list[Path] = []
+
+    def fake_run_live(token, destination, *, now, client_factory):
+        seen.append(destination)
+        return example_run()
+
+    monkeypatch.setattr(audit_cli, "run_live_audit", fake_run_live)
+
+    assert main(["--live"], now=FIXED_NOW) == 0
+    assert seen == [audit_cli.LIVE_OUTPUT_DIR]
+
+
+def test_successful_live_main_returns_zero(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("STOCKFIT_TOKEN", "invented-token")
+
+    result = main(
+        ["--live", "--output-dir", str(tmp_path)],
+        now=FIXED_NOW,
+        client_factory=lambda token: FakeAuditClient(),
+    )
+
+    assert result == 0
+
+
+def test_global_abort_leaves_existing_destination_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    run_offline_audit(tmp_path, now=FIXED_NOW)
+    before = artifact_bytes(tmp_path)
+    monkeypatch.setenv("STOCKFIT_TOKEN", "invented-token")
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            ["--live", "--output-dir", str(tmp_path)],
+            now=FIXED_NOW,
+            client_factory=lambda token: FakeAuditClient(
+                fail_at=1,
+                status=401,
+                message="private body invented-token",
+            ),
+        )
+
+    assert artifact_bytes(tmp_path) == before
+    assert "private body" not in str(exc_info.value)
+    assert "invented-token" not in str(exc_info.value)
+    assert json.loads(str(exc_info.value))["category"] == "http_401"
+
+
+def test_fixture_notice_is_required(tmp_path: Path) -> None:
+    fixture = tmp_path / "bad.json"
+    fixture.write_text(json.dumps({"fixtureNotice": "wrong", "payload": {}}))
+
+    with pytest.raises(ValueError, match="fixtureNotice"):
+        _load_fixture(fixture)
+
+
+def test_offline_path_does_not_read_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fail_token_lookup() -> str:
+        raise AssertionError("unexpected STOCKFIT_TOKEN lookup")
+
+    monkeypatch.setattr(audit_cli, "_stockfit_token", fail_token_lookup)
+
+    assert main(["--output-dir", str(tmp_path)], now=FIXED_NOW) == 0
+
+
+def test_stdout_contains_only_summary_mapping(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["--output-dir", str(tmp_path)], now=FIXED_NOW) == 0
+
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["mode"] == "synthetic"
+    assert "records" not in printed

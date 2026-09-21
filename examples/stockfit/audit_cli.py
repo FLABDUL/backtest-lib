@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
+import os
 import shutil
 import tempfile
-from collections.abc import Callable, Mapping
-from datetime import date, datetime
+from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, date, datetime
 from io import StringIO
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -26,7 +28,12 @@ from examples.stockfit.audit import (
     heatmap_rows,
     summarise_cohort,
 )
-from examples.stockfit.client import JsonObject, StockFitError, safe_rate_headers
+from examples.stockfit.client import (
+    JsonObject,
+    StockFitClient,
+    StockFitError,
+    safe_rate_headers,
+)
 
 LIVE_COHORT = (
     "AAPL",
@@ -42,13 +49,20 @@ LIVE_COHORT = (
     "CAT",
     "UNP",
 )
+OFFLINE_COHORT = ("AAPL", "MSFT", "COST")
 AUDIT_START = date(2021, 1, 1)
 STATEMENT_LIMIT = 10
+OFFLINE_OUTPUT_DIR = Path("artifacts/stockfit-audit")
+LIVE_OUTPUT_DIR = Path("artifacts/stockfit-audit-live")
+OFFLINE_GENERATED_AT = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
+FIXTURE_DIR = Path(__file__).with_name("fixtures")
+FIXTURE_NOTICE = "Invented synthetic data; not a StockFit response"
 _GLOBAL_FAILURE_STATUSES = frozenset({401, 403, 429})
 _INVALID_RESPONSE = object()
 ARTIFACT_FILENAMES = frozenset(
     {"summary.json", "company-quality.csv", "data-quality.svg"}
 )
+_MANAGED_EXISTING_FILENAMES = ARTIFACT_FILENAMES | {".gitkeep"}
 CSV_FIELDS = (
     "symbol",
     "company_name",
@@ -190,6 +204,68 @@ def collect_live_audit(
         mode="live",
         rate_limit=rate_limit,
     )
+
+
+def run_offline_audit(destination: Path, *, now: datetime) -> AuditRun:
+    """Audit only labelled invented fixtures and publish derived outputs."""
+
+    records = []
+    for symbol in OFFLINE_COHORT:
+        company_payload = _load_fixture(FIXTURE_DIR / f"{symbol}-company.json")
+        price_payload = _load_fixture(FIXTURE_DIR / f"{symbol}-price.json")
+        statement_payload = _load_fixture(FIXTURE_DIR / f"{symbol}-income.json")
+        records.append(
+            combine_company_audit(
+                symbol,
+                audit_company_metadata(symbol, company_payload),
+                audit_prices(
+                    symbol,
+                    price_payload,
+                    request_start=AUDIT_START,
+                    execution_date=now.date(),
+                ),
+                audit_statements(statement_payload),
+            )
+        )
+        del company_payload, price_payload, statement_payload
+
+    run = summarise_cohort(
+        cohort=OFFLINE_COHORT,
+        records=records,
+        failures={},
+        request_start=AUDIT_START,
+        execution_time=now,
+        mode="synthetic",
+        rate_limit={},
+    )
+    publish_artifacts(run, destination)
+    return run
+
+
+def run_live_audit(
+    token: str,
+    destination: Path,
+    *,
+    now: datetime,
+    client_factory: Callable[[str], AuditClient] = StockFitClient,
+) -> AuditRun:
+    """Collect a live audit, then publish only its derived records."""
+
+    run = collect_live_audit(client_factory(token), execution_time=now)
+    publish_artifacts(run, destination)
+    return run
+
+
+def _load_fixture(path: Path) -> object:
+    try:
+        wrapper = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"could not load fixture: {path.name}") from exc
+    if not isinstance(wrapper, dict) or wrapper.get("fixtureNotice") != FIXTURE_NOTICE:
+        raise ValueError(f"fixtureNotice is missing or invalid: {path.name}")
+    if "payload" not in wrapper:
+        raise ValueError(f"fixture payload is missing: {path.name}")
+    return wrapper["payload"]
 
 
 def _call_safely(
@@ -380,7 +456,7 @@ def _validate_existing_destination(destination: Path) -> None:
     unrelated = [
         path.name
         for path in destination.iterdir()
-        if not path.is_file() or path.name not in ARTIFACT_FILENAMES
+        if not path.is_file() or path.name not in _MANAGED_EXISTING_FILENAMES
     ]
     if unrelated:
         raise ValueError(
@@ -400,3 +476,55 @@ def _require_direct_child(path: Path, parent: Path) -> None:
 def _safe_remove_tree(path: Path, parent: Path) -> None:
     _require_direct_child(path, parent)
     shutil.rmtree(path)
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Audit StockFit data quality.")
+    parser.add_argument("--live", action="store_true")
+    parser.add_argument("--output-dir", type=Path)
+    return parser.parse_args(argv)
+
+
+def _stockfit_token() -> str:
+    return os.environ.get("STOCKFIT_TOKEN", "").strip()
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    now: datetime | None = None,
+    client_factory: Callable[[str], AuditClient] = StockFitClient,
+) -> int:
+    args = parse_args(argv)
+    execution_time = now or (datetime.now(UTC) if args.live else OFFLINE_GENERATED_AT)
+    destination = args.output_dir or (
+        LIVE_OUTPUT_DIR if args.live else OFFLINE_OUTPUT_DIR
+    )
+
+    if args.live:
+        token = _stockfit_token()
+        if not token:
+            raise SystemExit("Set STOCKFIT_TOKEN in this process before --live.")
+        try:
+            run = run_live_audit(
+                token,
+                destination,
+                now=execution_time,
+                client_factory=client_factory,
+            )
+        except AuditRunAborted as exc:
+            safe_abort = {
+                "category": exc.category,
+                "status": exc.status,
+                "rate_limit": exc.rate_limit,
+            }
+            raise SystemExit(json.dumps(safe_abort, sort_keys=True)) from None
+    else:
+        run = run_offline_audit(destination, now=execution_time)
+
+    print(json.dumps(summary_mapping(run), indent=2, sort_keys=True))
+    return 0 if run.run_status == "complete" else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

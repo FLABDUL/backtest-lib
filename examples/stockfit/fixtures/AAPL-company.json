@@ -1,0 +1,10 @@
+{
+  "fixtureNotice": "Invented synthetic data; not a StockFit response",
+  "payload": {
+    "symbols": ["AAPL"],
+    "name": "Synthetic AAPL Example",
+    "sector": "Synthetic Technology",
+    "industry": "Synthetic Devices",
+    "cik": "synthetic-present"
+  }
+}
