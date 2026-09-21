@@ -19,6 +19,17 @@ RESOLUTIONS = frozenset({"1d", "1wk", "1mo"})
 STATEMENT_PERIODS = frozenset({"annual", "quarter", "ttm"})
 
 
+def safe_rate_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    """Return only non-sensitive rate-limit response metadata."""
+
+    allowed = ("ratelimit", "rate-limit", "retry-after")
+    return {
+        name.lower(): str(value)
+        for name, value in headers.items()
+        if any(marker in name.lower() for marker in allowed)
+    }
+
+
 class StockFitError(RuntimeError):
     """A sanitised StockFit transport or response error."""
 

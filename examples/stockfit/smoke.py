@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 from typing import Any, Protocol
 
-from examples.stockfit.client import JsonObject, StockFitClient
+from examples.stockfit.client import JsonObject, StockFitClient, safe_rate_headers
 
 DETAIL_SYMBOL = "AAPL"
 PRICE_START = date(2025, 1, 1)
@@ -44,15 +44,6 @@ class ContractClient(Protocol):
     ) -> list[JsonObject]: ...
 
 
-def _safe_rate_headers(headers: Mapping[str, str]) -> dict[str, str]:
-    allowed = ("ratelimit", "rate-limit", "retry-after")
-    return {
-        name.lower(): str(value)
-        for name, value in headers.items()
-        if any(marker in name.lower() for marker in allowed)
-    }
-
-
 def _timestamp_date(value: object) -> str | None:
     if not isinstance(value, int | float):
         return None
@@ -77,7 +68,7 @@ def summarise_contract(
     normalised_symbol = symbol.strip().upper()
 
     company = client.company_details(normalised_symbol)
-    company_rate = _safe_rate_headers(client.last_response_headers)
+    company_rate = safe_rate_headers(client.last_response_headers)
 
     prices = client.price_history(
         normalised_symbol,
@@ -86,7 +77,7 @@ def summarise_contract(
         resolution="1d",
         adjusted=True,
     )
-    price_rate = _safe_rate_headers(client.last_response_headers)
+    price_rate = safe_rate_headers(client.last_response_headers)
 
     statements = client.income_statement(
         normalised_symbol,
@@ -94,7 +85,7 @@ def summarise_contract(
         limit=STATEMENT_LIMIT,
         split_adjust=True,
     )
-    statement_rate = _safe_rate_headers(client.last_response_headers)
+    statement_rate = safe_rate_headers(client.last_response_headers)
 
     data = prices.get("data")
     observation_count = len(data) if isinstance(data, list) else 0

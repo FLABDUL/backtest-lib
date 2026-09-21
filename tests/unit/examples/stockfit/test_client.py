@@ -7,7 +7,23 @@ from urllib.error import URLError
 
 import pytest
 
-from examples.stockfit.client import StockFitClient, StockFitError
+from examples.stockfit.client import StockFitClient, StockFitError, safe_rate_headers
+
+
+def test_safe_rate_headers_keeps_only_allow_listed_metadata() -> None:
+    assert safe_rate_headers(
+        {
+            "X-RateLimit-Limit": "50",
+            "Rate-Limit-Remaining": "49",
+            "Retry-After": "2",
+            "Authorization": "private",
+            "X-Request-Id": "private-id",
+        }
+    ) == {
+        "x-ratelimit-limit": "50",
+        "rate-limit-remaining": "49",
+        "retry-after": "2",
+    }
 
 
 def test_price_history_builds_authenticated_bounded_request() -> None:
