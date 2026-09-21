@@ -6,6 +6,8 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
+from email.utils import parsedate_to_datetime
+from http.client import IncompleteRead
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -17,17 +19,54 @@ type Transport = Callable[[Request, float], tuple[int, Mapping[str, str], bytes]
 BASE_URL = "https://api.stockfit.io/v1"
 RESOLUTIONS = frozenset({"1d", "1wk", "1mo"})
 STATEMENT_PERIODS = frozenset({"annual", "quarter", "ttm"})
+_RATE_HEADER_NAMES = frozenset(
+    {
+        "ratelimit-limit",
+        "ratelimit-remaining",
+        "ratelimit-reset",
+        "rate-limit-limit",
+        "rate-limit-remaining",
+        "rate-limit-reset",
+        "retry-after",
+        "x-rate-limit-limit",
+        "x-rate-limit-remaining",
+        "x-rate-limit-reset",
+        "x-ratelimit-limit",
+        "x-ratelimit-remaining",
+        "x-ratelimit-reset",
+        "x-ratelimit-limit-day",
+        "x-ratelimit-limit-minute",
+        "x-ratelimit-remaining-day",
+        "x-ratelimit-remaining-minute",
+    }
+)
 
 
 def safe_rate_headers(headers: Mapping[str, str]) -> dict[str, str]:
     """Return only non-sensitive rate-limit response metadata."""
 
-    allowed = ("ratelimit", "rate-limit", "retry-after")
-    return {
-        name.lower(): str(value)
-        for name, value in headers.items()
-        if any(marker in name.lower() for marker in allowed)
-    }
+    safe: dict[str, str] = {}
+    for name, value in headers.items():
+        normalised_name = name.lower()
+        normalised_value = str(value).strip()
+        if normalised_name not in _RATE_HEADER_NAMES:
+            continue
+        if normalised_name == "retry-after":
+            if not _valid_retry_after(normalised_value):
+                continue
+        elif not normalised_value.isdecimal():
+            continue
+        safe[normalised_name] = normalised_value
+    return safe
+
+
+def _valid_retry_after(value: str) -> bool:
+    if value.isdecimal():
+        return True
+    try:
+        return parsedate_to_datetime(value) is not None
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 class StockFitError(RuntimeError):
@@ -45,8 +84,14 @@ def _urlopen_transport(
         with urlopen(request, timeout=timeout) as response:
             return response.status, dict(response.headers), response.read()
     except HTTPError as exc:
-        return exc.code, dict(exc.headers or {}), exc.read()
-    except (TimeoutError, URLError):
+        try:
+            body = exc.read()
+        except (OSError, IncompleteRead):
+            raise StockFitError(
+                "StockFit request failed before a complete response arrived"
+            ) from None
+        return exc.code, dict(exc.headers or {}), body
+    except (OSError, URLError, IncompleteRead):
         raise StockFitError(
             "StockFit request failed before a response arrived"
         ) from None

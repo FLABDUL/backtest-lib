@@ -375,14 +375,17 @@ def quality_chart(run: AuditRun) -> alt.LayerChart:
         )
     )
     labels = base.mark_text(color="white", fontWeight="bold").encode(text="label:N")
+    mode_subtitle = (
+        "Synthetic demonstration data; not a StockFit response"
+        if run.mode == "synthetic"
+        else "Derived StockFit live metadata; raw provider data is not retained"
+    )
     return (rectangles + labels).properties(
         width=560,
         height=max(80, 34 * len(run.records)),
         title=alt.TitleParams(
             text="StockFit data quality",
-            subtitle=(
-                "Derived provenance is informational; raw provider data is not retained"
-            ),
+            subtitle=[mode_subtitle, "Provenance incidence is informational"],
         ),
     )
 

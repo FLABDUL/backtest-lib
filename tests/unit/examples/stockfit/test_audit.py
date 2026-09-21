@@ -78,6 +78,40 @@ def test_company_metadata_records_identifier_presence_without_value() -> None:
     assert result.status == "pass"
 
 
+@pytest.mark.parametrize("identifier", [320193, "320193", " 320193 "])
+def test_company_metadata_accepts_numeric_or_nonblank_string_identifier(
+    identifier: object,
+) -> None:
+    result = audit_company_metadata(
+        "AAPL",
+        {
+            "symbols": ["AAPL"],
+            "sector": "Technology",
+            "industry": "Devices",
+            "cik": identifier,
+        },
+    )
+
+    assert result.stable_identifiers_present is True
+
+
+@pytest.mark.parametrize("identifier", [None, "", "   ", 0, -1, True, 1.5])
+def test_company_metadata_rejects_invalid_identifier_presence(
+    identifier: object,
+) -> None:
+    result = audit_company_metadata(
+        "AAPL",
+        {
+            "symbols": ["AAPL"],
+            "sector": "Technology",
+            "industry": "Devices",
+            "cik": identifier,
+        },
+    )
+
+    assert result.stable_identifiers_present is False
+
+
 def test_company_metadata_rejects_non_object_response() -> None:
     result = audit_company_metadata("AAPL", [])
 

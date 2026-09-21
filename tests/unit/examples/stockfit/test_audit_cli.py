@@ -341,13 +341,25 @@ def test_svg_contains_labels_and_no_interactive_markers(tmp_path: Path) -> None:
     svg = output.read_text()
 
     assert "StockFit data quality" in svg
-    assert "Derived provenance" in svg
+    assert "Synthetic demonstration data; not a StockFit response" in svg
+    assert "Provenance incidence is informational" in svg
     assert "AAPL" in svg
     assert "company_metadata" in svg
     assert ">R<" in svg or ">P<" in svg or ">F<" in svg
     assert "tooltip" not in svg.lower()
     assert "vega-embed" not in svg.lower()
     assert "download" not in svg.lower()
+
+
+def test_live_svg_identifies_live_derived_metadata(tmp_path: Path) -> None:
+    output = tmp_path / "quality.svg"
+    run = replace(example_run(), mode="live")
+
+    quality_chart(run).save(output)
+    svg = output.read_text()
+
+    assert "Derived StockFit live metadata; raw provider data is not retained" in svg
+    assert "Provenance incidence is informational" in svg
 
 
 def test_second_successful_publish_replaces_all_three_artifacts(tmp_path: Path) -> None:

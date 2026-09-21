@@ -31,6 +31,15 @@ It writes only derived output:
 - `artifacts/stockfit/summary.json`
 - `artifacts/stockfit/nav-comparison.svg`
 
+Run the deterministic offline data-quality audit:
+
+```powershell
+uv run python -m examples.stockfit.audit_cli --output-dir artifacts/stockfit-audit
+```
+
+Its method and current draft results are documented in
+[`data-quality-audit.md`](data-quality-audit.md).
+
 ## Opt-in live checks
 
 Keep the StockFit token outside the repository. One PowerShell pattern is to
@@ -67,6 +76,19 @@ It requests AAPL, MSFT and COST, then keeps only a derived summary and SVG NAV
 chart in `artifacts/stockfit-live`. Do not commit bearer tokens, raw StockFit
 responses, prices, financial values, filing source maps, or API logs. Review
 generated artefacts before deciding whether they belong in version control.
+
+The twelve-company live data-quality audit is also explicit and writes only
+derived audit metadata:
+
+```powershell
+$secretPath = "$env:USERPROFILE\.codex\secrets\stockfit-token.txt"
+$env:STOCKFIT_TOKEN = [IO.File]::ReadAllText($secretPath).Trim()
+try {
+  uv run python -m examples.stockfit.audit_cli --live --output-dir artifacts/stockfit-audit-live
+} finally {
+  Remove-Item Env:STOCKFIT_TOKEN -ErrorAction SilentlyContinue
+}
+```
 
 ## Design and learning material
 

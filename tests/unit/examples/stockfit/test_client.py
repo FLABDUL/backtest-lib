@@ -16,6 +16,8 @@ def test_safe_rate_headers_keeps_only_allow_listed_metadata() -> None:
             "X-RateLimit-Limit": "50",
             "Rate-Limit-Remaining": "49",
             "Retry-After": "2",
+            "X-RateLimit-Debug": "private-marker",
+            "X-RateLimit-Limit-Other": "99",
             "Authorization": "private",
             "X-Request-Id": "private-id",
         }
@@ -24,6 +26,16 @@ def test_safe_rate_headers_keeps_only_allow_listed_metadata() -> None:
         "rate-limit-remaining": "49",
         "retry-after": "2",
     }
+
+
+def test_safe_rate_headers_rejects_malformed_values() -> None:
+    assert safe_rate_headers(
+        {
+            "X-RateLimit-Remaining": "49 private-marker",
+            "Retry-After": "private-marker",
+            "X-RateLimit-Limit-Day": "500000",
+        }
+    ) == {"x-ratelimit-limit-day": "500000"}
 
 
 def test_price_history_builds_authenticated_bounded_request() -> None:
@@ -121,6 +133,40 @@ def test_transport_error_traceback_does_not_expose_token(
             type(exc_info.value), exc_info.value, exc_info.value.__traceback__
         )
     )
+    assert "secret-token" not in rendered
+
+
+def test_response_body_connection_reset_is_sanitised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenResponse:
+        status = 200
+        headers: dict[str, str] = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def read(self) -> bytes:
+            raise ConnectionResetError("private body marker secret-token")
+
+    monkeypatch.setattr(
+        "examples.stockfit.client.urlopen",
+        lambda request, timeout: BrokenResponse(),
+    )
+    client = StockFitClient("secret-token")
+
+    with pytest.raises(StockFitError) as exc_info:
+        client.company_details("AAPL")
+
+    rendered = "".join(
+        traceback.format_exception(
+            type(exc_info.value), exc_info.value, exc_info.value.__traceback__
+        )
+    )
+    assert "private body marker" not in rendered
     assert "secret-token" not in rendered
 
 

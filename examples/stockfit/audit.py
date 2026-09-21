@@ -246,7 +246,7 @@ def audit_company_metadata(symbol: str, payload: object) -> MetadataAudit:
         sector=sector,
         industry=industry,
         stable_identifiers_present=any(
-            _text(payload.get(identifier)) is not None
+            _identifier_present(payload.get(identifier))
             for identifier in ("cik", "cusip", "figi")
         ),
         status=_status_for_reasons(ordered_reasons),
@@ -349,6 +349,12 @@ def _parse_price_observation(observation: object) -> tuple[float, date] | None:
     except (OSError, OverflowError, ValueError):
         return None
     return float(timestamp), observation_date
+
+
+def _identifier_present(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _invalid_price_response() -> PriceAudit:
