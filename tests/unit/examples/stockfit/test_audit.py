@@ -7,6 +7,8 @@ import pytest
 from examples.stockfit.audit import (
     audit_company_metadata,
     audit_prices,
+    audit_statements,
+    combine_company_audit,
     worst_status,
 )
 
@@ -255,3 +257,252 @@ def test_invalid_price_response_shape_fails(payload: object) -> None:
 
     assert result.status == "fail"
     assert result.reasons == ("price_response_invalid",)
+
+
+def statement(
+    period: str,
+    filed: str,
+    *,
+    fiscal_year: object | None = None,
+    revenue: object = 100.0,
+    operating_income: object = 10.0,
+    sources: object | None = None,
+    derived: object | None = None,
+) -> dict[str, object]:
+    return {
+        "period": period,
+        "fiscalYear": int(period[:4]) if fiscal_year is None else fiscal_year,
+        "fiscalPeriod": "FY",
+        "dateFiled": filed,
+        "facts": {"revenue": revenue, "operatingIncome": operating_income},
+        "sources": {} if sources is None else sources,
+        "derived": [] if derived is None else derived,
+    }
+
+
+def five_statements() -> list[dict[str, object]]:
+    return [
+        statement(f"{year}-12-31", f"{year + 1}-02-01")
+        for year in range(2020, 2025)
+    ]
+
+
+def test_filing_lag_boundary() -> None:
+    passing_rows = five_statements()
+    passing_rows[-1] = statement("2024-12-31", "2025-03-31")
+    reviewing_rows = five_statements()
+    reviewing_rows[-1] = statement("2024-12-31", "2025-04-01")
+
+    passing = audit_statements(passing_rows)
+    reviewing = audit_statements(reviewing_rows)
+
+    assert passing.max_filing_lag_days == 90
+    assert "filing_lag_large" not in passing.reasons
+    assert reviewing.max_filing_lag_days == 91
+    assert "filing_lag_large" in reviewing.reasons
+
+
+def test_negative_filing_lag_fails() -> None:
+    rows = five_statements()
+    rows[-1] = statement("2024-12-31", "2024-12-30")
+    result = audit_statements(rows)
+
+    assert result.status == "fail"
+    assert "filing_before_period_end" in result.reasons
+
+
+def test_numeric_before_is_counted_when_amendment_is_false() -> None:
+    rows = five_statements()
+    rows[-1] = statement(
+        "2024-12-31",
+        "2025-02-01",
+        sources={
+            "private-source-id": {
+                "dateFiled": "2026-02-01",
+                "amendment": False,
+                "facts": {"revenue": {"before": 100.0}},
+            }
+        },
+    )
+    result = audit_statements(rows)
+
+    assert result.source_entry_count == 1
+    assert result.before_fact_count == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("facts", []), ("sources", []), ("derived", {})],
+)
+def test_malformed_nested_statement_shape_fails(field: str, value: object) -> None:
+    row = statement("2024-12-31", "2025-02-01")
+    row[field] = value
+    result = audit_statements([row])
+
+    assert result.status == "fail"
+    assert result.reasons == ("statement_row_invalid",)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("period", "not-a-date"), ("dateFiled", "2025-02-30")],
+)
+def test_malformed_statement_dates_fail(field: str, value: object) -> None:
+    row = statement("2024-12-31", "2025-02-01")
+    row[field] = value
+
+    assert audit_statements([row]).reasons == ("statement_row_invalid",)
+
+
+def test_duplicate_and_missing_fiscal_years_are_counted() -> None:
+    rows = [
+        statement("2020-12-31", "2021-02-01"),
+        statement("2022-12-31", "2023-02-01"),
+        statement("2023-12-31", "2024-02-01", fiscal_year=2022),
+        statement("2024-12-31", "2025-02-01"),
+        statement("2025-12-31", "2026-02-01"),
+    ]
+    result = audit_statements(rows)
+
+    assert result.duplicate_fiscal_year_count == 1
+    assert result.missing_fiscal_year_count == 2
+    assert "fiscal_year_duplicate" in result.reasons
+    assert "fiscal_year_gap" in result.reasons
+    assert result.status == "fail"
+
+
+def test_short_statement_history_is_reviewed() -> None:
+    result = audit_statements(five_statements()[:4])
+
+    assert result.status == "review"
+    assert result.reasons == ("statement_history_short",)
+
+
+@pytest.mark.parametrize("fiscal_year", ["2024", True])
+def test_invalid_fiscal_year_uses_period_year(fiscal_year: object) -> None:
+    rows = five_statements()
+    rows[-1] = statement(
+        "2024-12-31",
+        "2025-02-01",
+        fiscal_year=fiscal_year,
+    )
+    result = audit_statements(rows)
+
+    assert result.fiscal_year_end == 2024
+    assert "fiscal_year_fallback" in result.reasons
+    assert result.status == "review"
+
+
+def test_absent_fiscal_year_uses_period_year() -> None:
+    rows = five_statements()
+    rows[-1].pop("fiscalYear")
+    result = audit_statements(rows)
+
+    assert result.fiscal_year_end == 2024
+    assert "fiscal_year_fallback" in result.reasons
+
+
+def test_required_fact_completeness_counts_only_finite_numbers() -> None:
+    rows = five_statements()
+    rows[0] = statement("2020-12-31", "2021-02-01", revenue=None)
+    rows[1] = statement(
+        "2021-12-31", "2022-02-01", operating_income=float("inf")
+    )
+    result = audit_statements(rows)
+
+    assert result.revenue_completeness_pct == 80.0
+    assert result.operating_income_completeness_pct == 80.0
+    assert "revenue_incomplete" in result.reasons
+    assert "operating_income_incomplete" in result.reasons
+
+
+@pytest.mark.parametrize("revenue", [0.0, -1.0])
+def test_non_positive_revenue_is_not_usable_for_consecutive_pair(
+    revenue: float,
+) -> None:
+    rows = [
+        statement("2020-12-31", "2021-02-01", revenue=revenue),
+        statement("2021-12-31", "2022-02-01"),
+        statement("2023-12-31", "2024-02-01"),
+        statement("2025-12-31", "2026-02-01"),
+        statement("2027-12-31", "2028-02-01"),
+    ]
+    result = audit_statements(rows)
+
+    assert "no_usable_consecutive_pair" in result.reasons
+    assert result.status == "fail"
+
+
+def test_usable_consecutive_pair_passes() -> None:
+    result = audit_statements(five_statements())
+
+    assert result.status == "pass"
+    assert "no_usable_consecutive_pair" not in result.reasons
+
+
+def test_filing_lag_median_handles_odd_and_even_counts() -> None:
+    odd = audit_statements(
+        [
+            statement("2022-12-31", "2023-01-10"),
+            statement("2023-12-31", "2024-01-20"),
+            statement("2024-12-31", "2025-01-30"),
+        ]
+    )
+    even = audit_statements(
+        [
+            statement("2021-12-31", "2022-01-10"),
+            statement("2022-12-31", "2023-01-20"),
+            statement("2023-12-31", "2024-01-30"),
+            statement("2024-12-31", "2025-02-09"),
+        ]
+    )
+
+    assert odd.median_filing_lag_days == 20.0
+    assert even.median_filing_lag_days == 25.0
+
+
+def test_nonnumeric_before_is_ignored_and_derived_incidence_is_measured() -> None:
+    rows = five_statements()
+    rows[-1] = statement(
+        "2024-12-31",
+        "2025-02-01",
+        sources={
+            "private-source-id": {
+                "facts": {"revenue": {"before": "not-numeric"}}
+            }
+        },
+        derived=["operatingMargin"],
+    )
+    result = audit_statements(rows)
+
+    assert result.before_fact_count == 0
+    assert result.derived_fact_count == 1
+    assert result.fact_count == 10
+    assert result.derived_fact_incidence_pct == 10.0
+
+
+@pytest.mark.parametrize("payload", [{}, None, "bad"])
+def test_invalid_statement_response_shape_fails(payload: object) -> None:
+    result = audit_statements(payload)
+
+    assert result.status == "fail"
+    assert result.reasons == ("statement_response_invalid",)
+
+
+def test_company_audit_combines_status_and_reasons_in_declared_order() -> None:
+    metadata = audit_company_metadata(
+        "AAA", {"symbols": ["AAA"], "name": "Example", "sector": "Industrials"}
+    )
+    prices = audit_prices(
+        "AAA",
+        price_payload("AAA", [date(2021, 1, 1), date(2021, 1, 9)]),
+        request_start=date(2021, 1, 1),
+        execution_date=date(2021, 1, 9),
+    )
+    statements = audit_statements(five_statements())
+
+    result = combine_company_audit(" aaa ", metadata, prices, statements)
+
+    assert result.symbol == "AAA"
+    assert result.status == "review"
+    assert result.reasons == ("company_industry_missing", "price_gap_large")
