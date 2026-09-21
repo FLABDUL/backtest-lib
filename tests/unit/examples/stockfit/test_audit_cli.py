@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+import csv
+import json
 import traceback
+from dataclasses import replace
 from datetime import UTC, date, datetime, time
+from io import StringIO
+from pathlib import Path
 
 import pytest
 
+from examples.stockfit import audit_cli
+from examples.stockfit.audit import summarise_cohort
 from examples.stockfit.audit_cli import (
     LIVE_COHORT,
     AuditRunAborted,
     collect_live_audit,
+    company_csv,
+    publish_artifacts,
+    quality_chart,
+    summary_mapping,
 )
 from examples.stockfit.client import StockFitError
 
@@ -67,9 +78,7 @@ class FakeAuditClient:
         resolution: str = "1d",
         adjusted: bool = True,
     ) -> dict[str, object]:
-        self.calls.append(
-            ("price_history", symbol, start, end, resolution, adjusted)
-        )
+        self.calls.append(("price_history", symbol, start, end, resolution, adjusted))
         self._before_call(symbol)
         if self.malformed_price_symbol == symbol:
             raise StockFitError("private malformed response", status=200)
@@ -86,9 +95,7 @@ class FakeAuditClient:
         limit: int = 20,
         split_adjust: bool = True,
     ) -> list[dict[str, object]]:
-        self.calls.append(
-            ("income_statement", symbol, period, limit, split_adjust)
-        )
+        self.calls.append(("income_statement", symbol, period, limit, split_adjust))
         self._before_call(symbol)
         return [
             {
@@ -204,3 +211,188 @@ def test_success_status_shape_error_becomes_fail_row_and_continues_calls() -> No
     assert jpm.status == "fail"
     assert jpm.reasons == ("price_response_invalid",)
     assert ("income_statement", "JPM", "annual", 10, True) in client.calls
+
+
+def example_run(
+    *,
+    symbol: str = "AAPL",
+    company_name: str | None = "Example Company",
+):
+    live_run = collect_live_audit(FakeAuditClient(), execution_time=FIXED_NOW)
+    record = next(record for record in live_run.records if record.symbol == symbol)
+    record = replace(
+        record,
+        metadata=replace(record.metadata, company_name=company_name),
+    )
+    return summarise_cohort(
+        cohort=(symbol,),
+        records=(record,),
+        failures={},
+        request_start=date(2021, 1, 1),
+        execution_time=FIXED_NOW,
+        mode="synthetic",
+        rate_limit={},
+    )
+
+
+def artifact_bytes(destination: Path) -> dict[str, bytes]:
+    return {path.name: path.read_bytes() for path in destination.iterdir()}
+
+
+def test_publish_writes_only_the_three_derived_artifacts(tmp_path: Path) -> None:
+    destination = tmp_path / "audit"
+
+    publish_artifacts(example_run(), destination)
+
+    assert sorted(path.name for path in destination.iterdir()) == [
+        "company-quality.csv",
+        "data-quality.svg",
+        "summary.json",
+    ]
+
+
+@pytest.mark.parametrize("prefix", ["=", "+", "-", "@"])
+def test_csv_neutralises_formula_prefix_and_summary_stays_cohort_only(
+    tmp_path: Path,
+    prefix: str,
+) -> None:
+    run = example_run(company_name=f'{prefix}HYPERLINK("bad")')
+
+    publish_artifacts(run, tmp_path / "audit")
+    csv_text = (tmp_path / "audit" / "company-quality.csv").read_text()
+    summary = json.loads((tmp_path / "audit" / "summary.json").read_text())
+
+    assert f"'{prefix}HYPERLINK" in csv_text
+    assert summary["cohort"] == ["AAPL"]
+
+
+def test_summary_is_deterministic_cohort_only_and_omits_forbidden_keys() -> None:
+    run = example_run()
+
+    first = summary_mapping(run)
+    second = summary_mapping(run)
+
+    def keys(value: object) -> set[str]:
+        if isinstance(value, dict):
+            return {str(key).lower() for key in value} | {
+                nested for item in value.values() for nested in keys(item)
+            }
+        if isinstance(value, list):
+            return {nested for item in value for nested in keys(item)}
+        return set()
+
+    assert first == second
+    assert "records" not in first
+    for forbidden in ("prices", "facts", "sources", "accession"):
+        assert forbidden not in keys(first)
+
+
+def test_company_csv_has_frozen_order_formatting_and_stable_reasons() -> None:
+    live_run = collect_live_audit(FakeAuditClient(), execution_time=FIXED_NOW)
+    run = summarise_cohort(
+        cohort=("AAPL", "MSFT"),
+        records=(live_run.records[1], live_run.records[0]),
+        failures={},
+        request_start=date(2021, 1, 1),
+        execution_time=FIXED_NOW,
+        mode="synthetic",
+        rate_limit={},
+    )
+
+    rows = list(csv.DictReader(StringIO(company_csv(run))))
+
+    assert [row["symbol"] for row in rows] == ["AAPL", "MSFT"]
+    assert rows[0]["revenue_completeness_pct"] == "100.00"
+    assert rows[0]["reasons"] == "price_gap_large"
+    assert "price_values" not in rows[0]
+    assert "facts" not in rows[0]
+
+
+def test_company_csv_formats_empty_optional_values() -> None:
+    run = example_run(company_name=None)
+    record = run.records[0]
+    record = replace(
+        record,
+        prices=replace(
+            record.prices,
+            start=None,
+            end=None,
+            largest_gap_days=None,
+        ),
+    )
+    run = replace(run, records=(record,))
+
+    row = next(csv.DictReader(StringIO(company_csv(run))))
+
+    assert row["company_name"] == ""
+    assert row["price_start"] == ""
+    assert row["price_end"] == ""
+    assert row["largest_gap_days"] == ""
+
+
+def test_svg_contains_labels_and_no_interactive_markers(tmp_path: Path) -> None:
+    output = tmp_path / "quality.svg"
+
+    quality_chart(example_run()).save(output)
+    svg = output.read_text()
+
+    assert "StockFit data quality" in svg
+    assert "Derived provenance" in svg
+    assert "AAPL" in svg
+    assert "company_metadata" in svg
+    assert ">R<" in svg or ">P<" in svg or ">F<" in svg
+    assert "tooltip" not in svg.lower()
+    assert "vega-embed" not in svg.lower()
+    assert "download" not in svg.lower()
+
+
+def test_second_successful_publish_replaces_all_three_artifacts(tmp_path: Path) -> None:
+    destination = tmp_path / "audit"
+    publish_artifacts(example_run(symbol="AAPL"), destination)
+    first = artifact_bytes(destination)
+
+    publish_artifacts(example_run(symbol="MSFT"), destination)
+    second = artifact_bytes(destination)
+
+    assert first.keys() == second.keys()
+    assert all(first[name] != second[name] for name in first)
+
+
+def test_unrelated_destination_file_refuses_without_changes(tmp_path: Path) -> None:
+    destination = tmp_path / "audit"
+    destination.mkdir()
+    unrelated = destination / "notes.txt"
+    unrelated.write_text("keep me")
+    before = artifact_bytes(destination)
+
+    with pytest.raises(ValueError, match="unrelated"):
+        publish_artifacts(example_run(), destination)
+
+    assert artifact_bytes(destination) == before
+
+
+def test_failed_directory_swap_restores_old_set_and_cleans_temporary_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "audit"
+    publish_artifacts(example_run(symbol="AAPL"), destination)
+    before = artifact_bytes(destination)
+    real_rename = audit_cli._rename_path
+    failed = False
+
+    def fail_staging_rename(source: Path, target: Path) -> None:
+        nonlocal failed
+        if "-staging-" in source.name and not failed:
+            failed = True
+            raise OSError("injected staging rename failure")
+        real_rename(source, target)
+
+    monkeypatch.setattr(audit_cli, "_rename_path", fail_staging_rename)
+
+    with pytest.raises(OSError, match="injected"):
+        publish_artifacts(example_run(symbol="MSFT"), destination)
+
+    assert artifact_bytes(destination) == before
+    assert not any("-staging-" in path.name for path in tmp_path.iterdir())
+    assert not any("-backup-" in path.name for path in tmp_path.iterdir())

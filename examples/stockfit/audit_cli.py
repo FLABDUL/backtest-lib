@@ -2,16 +2,28 @@
 
 from __future__ import annotations
 
+import csv
+import json
+import shutil
+import tempfile
 from collections.abc import Callable, Mapping
 from datetime import date, datetime
-from typing import Protocol
+from io import StringIO
+from pathlib import Path
+from typing import Any, Protocol, cast
+from uuid import uuid4
+
+import altair as alt
 
 from examples.stockfit.audit import (
+    CHECK_ORDER,
     AuditRun,
     audit_company_metadata,
     audit_prices,
     audit_statements,
+    cohort_summary,
     combine_company_audit,
+    heatmap_rows,
     summarise_cohort,
 )
 from examples.stockfit.client import JsonObject, StockFitError, safe_rate_headers
@@ -34,6 +46,38 @@ AUDIT_START = date(2021, 1, 1)
 STATEMENT_LIMIT = 10
 _GLOBAL_FAILURE_STATUSES = frozenset({401, 403, 429})
 _INVALID_RESPONSE = object()
+ARTIFACT_FILENAMES = frozenset(
+    {"summary.json", "company-quality.csv", "data-quality.svg"}
+)
+CSV_FIELDS = (
+    "symbol",
+    "company_name",
+    "sector",
+    "industry",
+    "stable_identifiers_present",
+    "price_start",
+    "price_end",
+    "price_observations",
+    "price_duplicate_count",
+    "price_invalid_count",
+    "price_out_of_order_count",
+    "largest_gap_days",
+    "statement_count",
+    "fiscal_year_start",
+    "fiscal_year_end",
+    "missing_fiscal_year_count",
+    "duplicate_fiscal_year_count",
+    "revenue_completeness_pct",
+    "operating_income_completeness_pct",
+    "median_filing_lag_days",
+    "max_filing_lag_days",
+    "source_entry_count",
+    "before_fact_count",
+    "derived_fact_count",
+    "derived_fact_incidence_pct",
+    "status",
+    "reasons",
+)
 
 
 class AuditClient(Protocol):
@@ -169,3 +213,190 @@ def _call_safely(
         category = "timeout_or_connection" if status is None else f"http_{status}"
         return _INVALID_RESPONSE, category, headers
     return payload, None, safe_rate_headers(client.last_response_headers)
+
+
+def summary_mapping(run: AuditRun) -> dict[str, object]:
+    """Return the deterministic cohort-only JSON payload."""
+
+    return cohort_summary(run)
+
+
+def company_csv(run: AuditRun) -> str:
+    """Render the approved per-company derived fields as deterministic CSV."""
+
+    output = StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=CSV_FIELDS, lineterminator="\n")
+    writer.writeheader()
+    for record in run.records:
+        metadata = record.metadata
+        prices = record.prices
+        statements = record.statements
+        writer.writerow(
+            {
+                "symbol": _csv_safe(record.symbol),
+                "company_name": _csv_safe(metadata.company_name),
+                "sector": _csv_safe(metadata.sector),
+                "industry": _csv_safe(metadata.industry),
+                "stable_identifiers_present": str(
+                    metadata.stable_identifiers_present
+                ).lower(),
+                "price_start": _date_text(prices.start),
+                "price_end": _date_text(prices.end),
+                "price_observations": prices.observations,
+                "price_duplicate_count": prices.duplicate_count,
+                "price_invalid_count": prices.invalid_count,
+                "price_out_of_order_count": prices.out_of_order_count,
+                "largest_gap_days": _optional_text(prices.largest_gap_days),
+                "statement_count": statements.statement_count,
+                "fiscal_year_start": _optional_text(statements.fiscal_year_start),
+                "fiscal_year_end": _optional_text(statements.fiscal_year_end),
+                "missing_fiscal_year_count": statements.missing_fiscal_year_count,
+                "duplicate_fiscal_year_count": statements.duplicate_fiscal_year_count,
+                "revenue_completeness_pct": _percentage_text(
+                    statements.revenue_completeness_pct
+                ),
+                "operating_income_completeness_pct": _percentage_text(
+                    statements.operating_income_completeness_pct
+                ),
+                "median_filing_lag_days": _optional_text(
+                    statements.median_filing_lag_days
+                ),
+                "max_filing_lag_days": _optional_text(statements.max_filing_lag_days),
+                "source_entry_count": statements.source_entry_count,
+                "before_fact_count": statements.before_fact_count,
+                "derived_fact_count": statements.derived_fact_count,
+                "derived_fact_incidence_pct": _percentage_text(
+                    statements.derived_fact_incidence_pct
+                ),
+                "status": record.status,
+                "reasons": ";".join(record.reasons),
+            }
+        )
+    return output.getvalue()
+
+
+def quality_chart(run: AuditRun) -> alt.LayerChart:
+    """Build a fixed-order, non-interactive status heatmap."""
+
+    values = [{**row, "label": row["status"][0].upper()} for row in heatmap_rows(run)]
+    data = alt.Data(values=values)
+    base = alt.Chart(data).encode(
+        x=alt.X("check:N", sort=cast(Any, list(CHECK_ORDER)), title=None),
+        y=alt.Y(
+            "symbol:N",
+            sort=[record.symbol for record in run.records],
+            title=None,
+        ),
+    )
+    rectangles = base.mark_rect().encode(
+        color=alt.Color(
+            "status:N",
+            scale=alt.Scale(
+                domain=["pass", "review", "fail"],
+                range=["#2e7d32", "#ed9b40", "#c62828"],
+            ),
+            legend=alt.Legend(title="Status"),
+        )
+    )
+    labels = base.mark_text(color="white", fontWeight="bold").encode(text="label:N")
+    return (rectangles + labels).properties(
+        width=560,
+        height=max(80, 34 * len(run.records)),
+        title=alt.TitleParams(
+            text="StockFit data quality",
+            subtitle=(
+                "Derived provenance is informational; raw provider data is not retained"
+            ),
+        ),
+    )
+
+
+def publish_artifacts(run: AuditRun, destination: Path) -> None:
+    """Render and atomically publish the complete three-file artifact set."""
+
+    destination = destination.resolve(strict=False)
+    parent = destination.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    _validate_existing_destination(destination)
+
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}-staging-", dir=parent)
+    ).resolve()
+    backup = (parent / f".{destination.name}-backup-{uuid4().hex}").resolve()
+    _require_direct_child(staging, parent)
+    _require_direct_child(backup, parent)
+
+    try:
+        (staging / "summary.json").write_text(
+            json.dumps(summary_mapping(run), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        (staging / "company-quality.csv").write_text(
+            company_csv(run), encoding="utf-8", newline=""
+        )
+        quality_chart(run).save(staging / "data-quality.svg")
+
+        had_destination = destination.exists()
+        if had_destination:
+            _rename_path(destination, backup)
+        try:
+            _rename_path(staging, destination)
+        except BaseException:
+            if backup.exists():
+                _rename_path(backup, destination)
+            raise
+        if backup.exists():
+            _safe_remove_tree(backup, parent)
+    except BaseException:
+        if staging.exists():
+            _safe_remove_tree(staging, parent)
+        raise
+
+
+def _csv_safe(value: str | None) -> str:
+    if value is None:
+        return ""
+    return f"'{value}" if value.startswith(("=", "+", "-", "@")) else value
+
+
+def _date_text(value: date | None) -> str:
+    return value.isoformat() if value else ""
+
+
+def _optional_text(value: int | float | None) -> str:
+    return "" if value is None else str(value)
+
+
+def _percentage_text(value: float) -> str:
+    return f"{value:.2f}"
+
+
+def _validate_existing_destination(destination: Path) -> None:
+    if not destination.exists():
+        return
+    if not destination.is_dir():
+        raise ValueError("artifact destination must be a directory")
+    unrelated = [
+        path.name
+        for path in destination.iterdir()
+        if not path.is_file() or path.name not in ARTIFACT_FILENAMES
+    ]
+    if unrelated:
+        raise ValueError(
+            f"artifact destination contains unrelated entries: {unrelated}"
+        )
+
+
+def _rename_path(source: Path, target: Path) -> None:
+    source.rename(target)
+
+
+def _require_direct_child(path: Path, parent: Path) -> None:
+    if path.resolve(strict=False).parent != parent.resolve():
+        raise ValueError("temporary artifact path escaped its intended parent")
+
+
+def _safe_remove_tree(path: Path, parent: Path) -> None:
+    _require_direct_child(path, parent)
+    shutil.rmtree(path)
