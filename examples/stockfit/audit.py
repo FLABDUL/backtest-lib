@@ -1,13 +1,64 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from statistics import median
 from typing import Literal, TypeGuard
 
 type AuditStatus = Literal["pass", "review", "fail"]
+type AuditMode = Literal["synthetic", "live"]
+
+CHECK_ORDER = (
+    "company_metadata",
+    "price_coverage",
+    "price_integrity",
+    "statement_coverage",
+    "fact_completeness",
+    "filing_lag",
+    "provenance",
+)
+
+THRESHOLDS = {
+    "price_start_delay_days": 31,
+    "price_end_staleness_days": 7,
+    "price_gap_days": 7,
+    "minimum_annual_statements": 5,
+    "required_fact_completeness_pct": 100.0,
+    "maximum_filing_lag_days": 90,
+}
+
+REASON_DEFINITIONS = {
+    "company_response_invalid": "Company response is not an object.",
+    "company_symbol_mismatch": (
+        "Company response does not include the requested symbol."
+    ),
+    "company_sector_missing": "Sector metadata is missing.",
+    "company_industry_missing": "Industry metadata is missing.",
+    "price_response_invalid": "Price response has an invalid shape.",
+    "price_symbol_mismatch": "Price response symbol differs from the request.",
+    "price_empty": "Price response contains no observations.",
+    "price_observation_invalid": "At least one price observation is invalid.",
+    "price_duplicate_timestamp": "Price observations contain a duplicate timestamp.",
+    "price_start_late": "Price coverage starts more than 31 days after requested.",
+    "price_end_stale": "Price coverage ends more than seven days before execution.",
+    "price_gap_large": "A calendar gap between prices exceeds seven days.",
+    "statement_response_invalid": "Statement response is not a list.",
+    "statement_row_invalid": "At least one annual statement row is malformed.",
+    "filing_before_period_end": "A filing date precedes its fiscal period end.",
+    "fiscal_year_duplicate": "Annual statements contain a duplicate fiscal year.",
+    "no_usable_consecutive_pair": "No consecutive usable annual pair exists.",
+    "statement_history_short": "Fewer than five annual statements were returned.",
+    "fiscal_year_gap": "At least one fiscal year is missing from the returned range.",
+    "fiscal_year_fallback": "A fiscal year was inferred from a validated period date.",
+    "revenue_incomplete": "Revenue completeness is below 100 percent.",
+    "operating_income_incomplete": (
+        "Operating-income completeness is below 100 percent."
+    ),
+    "filing_lag_large": "Maximum filing lag exceeds 90 days.",
+}
 
 STATUS_SEVERITY: dict[AuditStatus, int] = {
     "pass": 0,
@@ -109,6 +160,23 @@ class CompanyAudit:
     statements: StatementAudit
     status: AuditStatus
     reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AuditRun:
+    mode: AuditMode
+    generated_at: datetime
+    cohort: tuple[str, ...]
+    request_start: date
+    request_end: date
+    records: tuple[CompanyAudit, ...]
+    run_status: Literal["complete", "incomplete"]
+    missing_symbols: tuple[str, ...]
+    failure_categories: tuple[str, ...]
+    shared_price_start: date | None
+    shared_price_end: date | None
+    status_counts: dict[AuditStatus, int]
+    rate_limit: dict[str, str]
 
 
 def worst_status(*statuses: AuditStatus) -> AuditStatus:
@@ -232,8 +300,7 @@ def audit_prices(
     start = dates[0] if dates else None
     end = dates[-1] if dates else None
     gaps = [
-        (later - earlier).days
-        for earlier, later in zip(dates, dates[1:], strict=False)
+        (later - earlier).days for earlier, later in zip(dates, dates[1:], strict=False)
     ]
     largest_gap_days = max(gaps, default=None)
 
@@ -414,15 +481,18 @@ def combine_company_audit(
 
 def _parse_statement_row(
     row: object,
-) -> tuple[
-    date,
-    date,
-    int,
-    bool,
-    Mapping[object, object],
-    Mapping[object, object],
-    list[str],
-] | None:
+) -> (
+    tuple[
+        date,
+        date,
+        int,
+        bool,
+        Mapping[object, object],
+        Mapping[object, object],
+        list[str],
+    ]
+    | None
+):
     if not isinstance(row, Mapping):
         return None
     period = _parse_date(row.get("period"))
@@ -534,4 +604,224 @@ def _empty_statement_audit(reason: str) -> StatementAudit:
         derived_fact_incidence_pct=0.0,
         status="fail",
         reasons=(reason,),
+    )
+
+
+def summarise_cohort(
+    *,
+    cohort: Sequence[str],
+    records: Sequence[CompanyAudit],
+    failures: Mapping[str, str],
+    request_start: date,
+    execution_time: datetime,
+    mode: AuditMode,
+    rate_limit: Mapping[str, str],
+) -> AuditRun:
+    normalised_cohort = tuple(symbol.strip().upper() for symbol in cohort)
+    if len(set(normalised_cohort)) != len(normalised_cohort):
+        raise ValueError("cohort symbols must be unique")
+
+    records_by_symbol: dict[str, CompanyAudit] = {}
+    for record in records:
+        symbol = record.symbol.strip().upper()
+        if symbol not in normalised_cohort or symbol in records_by_symbol:
+            raise ValueError("record symbols must be unique members of the cohort")
+        records_by_symbol[symbol] = record
+
+    normalised_failures = {
+        symbol.strip().upper(): category for symbol, category in failures.items()
+    }
+    if not set(normalised_failures).issubset(normalised_cohort):
+        raise ValueError("failure symbols must be members of the cohort")
+    for category in normalised_failures.values():
+        if not _valid_failure_category(category):
+            raise ValueError(f"unknown failure category: {category!r}")
+
+    ordered_records = tuple(
+        records_by_symbol[symbol]
+        for symbol in normalised_cohort
+        if symbol in records_by_symbol
+    )
+    missing_symbols = tuple(
+        symbol for symbol in normalised_cohort if symbol not in records_by_symbol
+    )
+    failure_categories = tuple(
+        dict.fromkeys(
+            normalised_failures[symbol]
+            for symbol in normalised_cohort
+            if symbol in normalised_failures
+        )
+    )
+
+    starts = [record.prices.start for record in ordered_records]
+    ends = [record.prices.end for record in ordered_records]
+    shared_start: date | None = None
+    shared_end: date | None = None
+    if ordered_records and all(value is not None for value in starts + ends):
+        candidate_start = max(value for value in starts if value is not None)
+        candidate_end = min(value for value in ends if value is not None)
+        if candidate_start <= candidate_end:
+            shared_start = candidate_start
+            shared_end = candidate_end
+
+    status_counts: dict[AuditStatus, int] = {
+        "pass": 0,
+        "review": 0,
+        "fail": 0,
+    }
+    for record in ordered_records:
+        status_counts[record.status] += 1
+
+    return AuditRun(
+        mode=mode,
+        generated_at=execution_time,
+        cohort=normalised_cohort,
+        request_start=request_start,
+        request_end=execution_time.date(),
+        records=ordered_records,
+        run_status="incomplete" if missing_symbols else "complete",
+        missing_symbols=missing_symbols,
+        failure_categories=failure_categories,
+        shared_price_start=shared_start,
+        shared_price_end=shared_end,
+        status_counts=status_counts,
+        rate_limit=dict(
+            sorted((str(key), str(value)) for key, value in rate_limit.items())
+        ),
+    )
+
+
+def cohort_summary(run: AuditRun) -> dict[str, object]:
+    records = run.records
+    return {
+        "mode": run.mode,
+        "generated_at": run.generated_at.isoformat(),
+        "cohort": list(run.cohort),
+        "request_start": run.request_start.isoformat(),
+        "request_end": run.request_end.isoformat(),
+        "run_status": run.run_status,
+        "missing_symbols": list(run.missing_symbols),
+        "failure_categories": list(run.failure_categories),
+        "shared_price_start": (
+            run.shared_price_start.isoformat() if run.shared_price_start else None
+        ),
+        "shared_price_end": (
+            run.shared_price_end.isoformat() if run.shared_price_end else None
+        ),
+        "status_counts": dict(run.status_counts),
+        "revenue_completeness_pct": _distribution(
+            [record.statements.revenue_completeness_pct for record in records]
+        ),
+        "operating_income_completeness_pct": _distribution(
+            [record.statements.operating_income_completeness_pct for record in records]
+        ),
+        "median_filing_lag_days": _distribution(
+            [
+                value
+                for record in records
+                if (value := record.statements.median_filing_lag_days) is not None
+            ]
+        ),
+        "max_filing_lag_days": _distribution(
+            [
+                float(value)
+                for record in records
+                if (value := record.statements.max_filing_lag_days) is not None
+            ]
+        ),
+        "provenance_totals": {
+            "source_entries": sum(
+                record.statements.source_entry_count for record in records
+            ),
+            "numeric_before_facts": sum(
+                record.statements.before_fact_count for record in records
+            ),
+            "derived_facts": sum(
+                record.statements.derived_fact_count for record in records
+            ),
+        },
+        "rate_limit": dict(run.rate_limit),
+        "thresholds": dict(THRESHOLDS),
+        "reason_definitions": dict(REASON_DEFINITIONS),
+        "raw_provider_data_retained": False,
+    }
+
+
+def heatmap_rows(run: AuditRun) -> tuple[dict[str, str], ...]:
+    rows: list[dict[str, str]] = []
+    for record in run.records:
+        statuses = _check_statuses(record)
+        rows.extend(
+            {
+                "symbol": record.symbol,
+                "check": check,
+                "status": statuses[check],
+            }
+            for check in CHECK_ORDER
+        )
+    return tuple(rows)
+
+
+def _valid_failure_category(category: str) -> bool:
+    return (
+        category in {"timeout", "timeout_or_connection"}
+        or re.fullmatch(r"http_[1-5][0-9]{2}", category) is not None
+    )
+
+
+def _distribution(values: Sequence[float]) -> dict[str, float | None]:
+    if not values:
+        return {"min": None, "median": None, "max": None}
+    return {
+        "min": float(min(values)),
+        "median": float(median(values)),
+        "max": float(max(values)),
+    }
+
+
+def _check_statuses(record: CompanyAudit) -> dict[str, AuditStatus]:
+    return {
+        "company_metadata": record.metadata.status,
+        "price_coverage": _status_for_selected_reasons(
+            record.reasons,
+            {"price_empty", "price_start_late", "price_end_stale", "price_gap_large"},
+        ),
+        "price_integrity": _status_for_selected_reasons(
+            record.reasons,
+            {
+                "price_response_invalid",
+                "price_symbol_mismatch",
+                "price_observation_invalid",
+                "price_duplicate_timestamp",
+            },
+        ),
+        "statement_coverage": _status_for_selected_reasons(
+            record.reasons,
+            {
+                "statement_response_invalid",
+                "statement_row_invalid",
+                "fiscal_year_duplicate",
+                "no_usable_consecutive_pair",
+                "statement_history_short",
+                "fiscal_year_gap",
+                "fiscal_year_fallback",
+            },
+        ),
+        "fact_completeness": _status_for_selected_reasons(
+            record.reasons,
+            {"revenue_incomplete", "operating_income_incomplete"},
+        ),
+        "filing_lag": _status_for_selected_reasons(
+            record.reasons,
+            {"filing_before_period_end", "filing_lag_large"},
+        ),
+        "provenance": "pass",
+    }
+
+
+def _status_for_selected_reasons(
+    reasons: Sequence[str], selected: set[str]
+) -> AuditStatus:
+    return _status_for_reasons(
+        tuple(reason for reason in reasons if reason in selected)
     )
