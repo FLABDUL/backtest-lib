@@ -6,6 +6,7 @@ on:
     paths:
       - "**/*.py"
       - "**/*.pyi"
+      - "**/*.md"
       - "rust/**/*.rs"
       - "rust/Cargo.toml"
       - "pyproject.toml"
@@ -16,6 +17,7 @@ on:
     paths:
       - "**/*.py"
       - "**/*.pyi"
+      - "**/*.md"
       - "rust/**/*.rs"
       - "rust/Cargo.toml"
       - "pyproject.toml"
