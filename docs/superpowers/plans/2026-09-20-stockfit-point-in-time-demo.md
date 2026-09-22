@@ -136,7 +136,9 @@ def _urlopen_transport(
     except HTTPError as exc:
         return exc.code, dict(exc.headers), exc.read()
     except (TimeoutError, URLError) as exc:
-        raise StockFitError("StockFit request failed before a response arrived") from exc
+        raise StockFitError(
+            "StockFit request failed before a response arrived"
+        ) from exc
 
 
 @dataclass(slots=True)
@@ -269,8 +271,18 @@ Expected: tests pass; the scan finds documentation/code references only, with no
 ```python
 def test_price_frame_sorts_and_intersects_dates() -> None:
     payloads = {
-        "AAA": {"symbol": "AAA", "data": [[1735862400000, 12.0], [1735689600000, 10.0]]},
-        "BBB": {"symbol": "BBB", "data": [[1735689600000, 20.0], [1735776000000, 21.0], [1735862400000, 22.0]]},
+        "AAA": {
+            "symbol": "AAA",
+            "data": [[1735862400000, 12.0], [1735689600000, 10.0]],
+        },
+        "BBB": {
+            "symbol": "BBB",
+            "data": [
+                [1735689600000, 20.0],
+                [1735776000000, 21.0],
+                [1735862400000, 22.0],
+            ],
+        },
     }
     assert price_frame(payloads).to_dict(as_series=False) == {
         "date": [date(2025, 1, 1), date(2025, 1, 3)],
@@ -297,9 +309,21 @@ def test_fact_as_of_rolls_back_multiple_amendments() -> None:
         "dateFiled": "2023-02-01",
         "facts": {"revenue": 130.0},
         "sources": {
-            "base": {"dateFiled": "2023-02-01", "amendment": False, "facts": {"revenue": {}}},
-            "a1": {"dateFiled": "2023-06-01", "amendment": True, "facts": {"revenue": {"before": 100.0}}},
-            "a2": {"dateFiled": "2023-09-01", "amendment": True, "facts": {"revenue": {"before": 120.0}}},
+            "base": {
+                "dateFiled": "2023-02-01",
+                "amendment": False,
+                "facts": {"revenue": {}},
+            },
+            "a1": {
+                "dateFiled": "2023-06-01",
+                "amendment": True,
+                "facts": {"revenue": {"before": 100.0}},
+            },
+            "a2": {
+                "dateFiled": "2023-09-01",
+                "amendment": True,
+                "facts": {"revenue": {"before": 120.0}},
+            },
         },
     }
     assert fact_as_of(statement, "revenue", date(2023, 1, 31)) is None

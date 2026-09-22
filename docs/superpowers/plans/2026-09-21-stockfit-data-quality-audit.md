@@ -409,8 +409,10 @@ Add tests that prove:
 def test_cohort_summary_uses_actual_shared_price_intersection() -> None:
     run = summarise_cohort(
         cohort=("AAA", "BBB"),
-        records=(company_audit("AAA", "2021-01-04", "2025-01-03"),
-                 company_audit("BBB", "2021-02-01", "2024-12-31")),
+        records=(
+            company_audit("AAA", "2021-01-04", "2025-01-03"),
+            company_audit("BBB", "2021-02-01", "2024-12-31"),
+        ),
         failures={},
         request_start=date(2021, 1, 1),
         execution_time=FIXED_NOW,
@@ -466,6 +468,7 @@ CHECK_ORDER = (
     "filing_lag",
     "provenance",
 )
+
 
 @dataclass(frozen=True, slots=True)
 class AuditRun:
@@ -639,7 +642,7 @@ def test_publish_writes_only_the_three_derived_artifacts(tmp_path) -> None:
 
 
 def test_csv_neutralises_formula_prefix_and_summary_stays_cohort_only(tmp_path) -> None:
-    run = example_run(company_name="=HYPERLINK(\"bad\")")
+    run = example_run(company_name='=HYPERLINK("bad")')
     publish_artifacts(run, tmp_path / "audit")
     csv_text = (tmp_path / "audit" / "company-quality.csv").read_text()
     summary = json.loads((tmp_path / "audit" / "summary.json").read_text())

@@ -37,7 +37,6 @@ results = backtest.run()
 print("total return:", results.total_return)
 
 results.values_held.plot().properties(width=1000, height=600)
-
 ```
 Output: ![The output chart of the above result](docs/assets/chart.svg)
 
@@ -86,10 +85,7 @@ def monthly_rebalance(universe, market, ctx):
         return hold()
     latest = market.prices.close.by_period[-1]
     month_ago = market.prices.close.by_period[-21]
-    strength = {
-        sec: max(latest[sec] / month_ago[sec] - 1.0, 0.0)
-        for sec in universe
-    }
+    strength = {sec: max(latest[sec] / month_ago[sec] - 1.0, 0.0) for sec in universe}
     total = sum(strength.values())
     if total == 0:
         return hold()
@@ -142,8 +138,8 @@ def aapl_momentum_with_liquidity(
         market.volume.by_security["AAPL"] if market.volume is not None else None
     )
 
-    momentum_lookback = 126   # ~6 months
-    vol_window = 60           # ~3 months
+    momentum_lookback = 126  # ~6 months
+    vol_window = 60  # ~3 months
 
     # make sure we have enough history
     if len(aapl_close) < momentum_lookback + 1:
