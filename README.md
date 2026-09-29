@@ -6,6 +6,76 @@
 
 Find the full reference docs [here](https://jathoms.github.io/backtest-lib)
 
+## Developer setup
+
+The package supports Python 3.12 and newer. CI and the manual review guide use
+Python 3.14. Building the editable package also requires the stable Rust
+toolchain because the project includes a small Maturin extension.
+
+From PowerShell at the repository root, confirm the tools and create the locked
+development environment:
+
+```powershell
+python --version
+uv --version
+rustc --version
+just --version
+uv sync --group dev --group docs --frozen
+.\.venv\Scripts\python.exe --version
+```
+
+Run a fast end-to-end check before exploring the code:
+
+```powershell
+uv run pytest tests/e2e/test_stockfit_demo.py -q
+uv run python -m examples.stockfit.demo --output-dir artifacts/stockfit-review
+```
+
+Both commands are offline and use invented fixtures. A StockFit token is not
+needed for development or for the manual review.
+
+For VS Code, open the repository folder, select
+`.venv\Scripts\python.exe` with **Python: Select Interpreter**, and follow the
+[manual code-review guide](docs/stockfit/learning-guide.md) to install the local
+debug configurations.
+
+## Architecture at a glance
+
+```mermaid
+flowchart LR
+    Data[Prices and signals] --> Market[MarketView]
+    Market --> Backtest[Backtest period loop]
+    Backtest --> Engine[Engine]
+    Engine --> Strategy[Strategy callable]
+    Strategy --> Decision[Decision]
+    Decision --> Engine
+    Engine --> Portfolio[Updated portfolio]
+    Portfolio --> Backtest
+    Backtest --> Results[BacktestResults]
+```
+
+`MarketView` time-fences the data visible at each period. `Backtest` passes that
+view to the engine, which calls the strategy. The strategy returns a declarative
+`Decision`; the engine turns it into an execution plan and updated portfolio.
+`Backtest` coordinates the period loop and materialises the result history.
+
+### Repository map
+
+```text
+src/backtest_lib/        Core market, strategy, engine, portfolio and backtest code
+examples/stockfit/       Offline-first StockFit adapter and research workflow
+tests/unit/              Focused behavioural tests for individual components
+tests/e2e/               Complete workflow and lookahead-safety tests
+docs/source/             Sphinx reference documentation
+docs/stockfit/           Methodology, evidence and manual learning material
+rust/                    Native universe-mapping extension built by Maturin
+```
+
+To understand the code rather than only run it, follow the
+[manual code-review guide](docs/stockfit/learning-guide.md). It traces one
+synthetic fact through the StockFit adapter, point-in-time transforms,
+strategy, backtest engine and derived outputs.
+
 ## Usage
 
 ### Quickstart
@@ -166,11 +236,24 @@ def aapl_momentum_with_liquidity(
     return target_weights(target, fill_cash=True)
 ```
 
-## Building
+## Validation
 
-- get python 3.14
-- run `pip install uv`
-- run `uv run python --version` and it will create a venv for you
+Run the same local gates used by the repository workflows:
+
+```powershell
+uv run pytest
+uv run ruff format --check
+uv run ruff check
+uv run pyrefly check
+# Run the documentation gates in Linux CI or WSL.
+just doctest
+just docs
+```
+
+On native Windows, Sphinx's generated `Cash` class and `cash` function pages
+collide on a case-insensitive filesystem. The Python checks above work in
+PowerShell; use WSL or the repository's Linux CI for `just doctest` and
+`just docs` until those API stub names are made distinct.
 
 ## Code style
 
