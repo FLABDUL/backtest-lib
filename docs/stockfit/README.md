@@ -94,6 +94,11 @@ try {
 
 - [`methodology.md`](methodology.md) defines the signal and time gates.
 - [`case-study-draft.md`](case-study-draft.md) is an unpublished portfolio
-  narrative based on the verified live run.
+  narrative combining the verified live backtest and data-quality audit.
+- [`nav-comparison.svg`](../../artifacts/stockfit-live/nav-comparison.svg) is the
+  primary portfolio visual; it compares the fundamental rule with its matched
+  equal-weight baseline.
+- [`data-quality.svg`](../../artifacts/stockfit-audit-live/data-quality.svg) is
+  the supporting audit visual across the frozen twelve-company cohort.
 - [`learning-guide.md`](learning-guide.md) provides a 90-minute code-tracing
   session for revisiting the implementation in VS Code.
