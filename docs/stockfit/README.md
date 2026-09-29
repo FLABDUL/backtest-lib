@@ -20,6 +20,20 @@ uv sync
 uv run python --version
 ```
 
+For a complete development environment, including tests, type checking and
+documentation tools, use:
+
+```powershell
+uv sync --group dev --group docs --frozen
+uv run pytest tests/e2e/test_stockfit_demo.py -q
+```
+
+The [manual code-review guide](learning-guide.md) provides a structured route
+through both the StockFit example and the underlying `backtest-lib` engine. It
+includes VS Code debug configurations, architecture diagrams, breakpoints,
+self-check questions and reversible exercises. The whole review is offline and
+does not require a StockFit token.
+
 Run the deterministic offline demonstration:
 
 ```powershell
@@ -92,6 +106,10 @@ try {
 
 ## Design and learning material
 
+- [`learning-guide.md`](learning-guide.md) is the main code-level review path,
+  from environment setup to a small test-first exercise.
+- [`vscode-launch.example.json`](vscode-launch.example.json) provides local
+  offline demo, audit and pytest debugger configurations.
 - [`methodology.md`](methodology.md) defines the signal and time gates.
 - [`case-study-draft.md`](case-study-draft.md) is an unpublished portfolio
   narrative combining the verified live backtest and data-quality audit.
@@ -100,5 +118,3 @@ try {
   equal-weight baseline.
 - [`data-quality.svg`](../../artifacts/stockfit-audit-live/data-quality.svg) is
   the supporting audit visual across the frozen twelve-company cohort.
-- [`learning-guide.md`](learning-guide.md) provides a 90-minute code-tracing
-  session for revisiting the implementation in VS Code.

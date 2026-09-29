@@ -1,0 +1,49 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug: StockFit offline demo",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "examples.stockfit.demo",
+      "args": ["--output-dir", "artifacts/stockfit-review"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Debug: StockFit offline audit",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "examples.stockfit.audit_cli",
+      "args": ["--output-dir", "artifacts/stockfit-audit-review"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Debug: StockFit end-to-end test",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": [
+        "tests/e2e/test_stockfit_demo.py::test_offline_demo_writes_deterministic_derived_outputs",
+        "-q",
+        "-s"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Debug: current pytest file",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-q", "-s"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ]
+}
